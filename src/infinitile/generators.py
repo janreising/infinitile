@@ -182,7 +182,6 @@ class EarthLayer(Layer):
                 heightmap[:, i] = (1 - alpha) * west + alpha * heightmap[:, i]
         return heightmap
 
-  
 class PrecipitationLayer(Layer):
     def __init__(
         self,
