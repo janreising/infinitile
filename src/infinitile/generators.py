@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
 import logging
+from skimage.graph import route_through_array
 
 
 class Layer():
@@ -1401,48 +1402,17 @@ class RoadLayer(Layer):
         self.logger.info(f"Built road network with {len(road_segments)} segments")
     
     def _find_optimal_path(self, start, end):
-        """Find optimal path between two points using Dijkstra's algorithm."""
-        import heapq
-        
-        start_y, start_x = start
-        end_y, end_x = end
-        
-        # Priority queue: (cost, y, x, path)
-        pq = [(0, start_y, start_x, [(start_y, start_x)])]
-        visited = set()
-        
-        while pq:
-            current_cost, y, x, path = heapq.heappop(pq)
-            
-            if (y, x) in visited:
-                continue
-            
-            visited.add((y, x))
-            
-            # Check if we reached the destination
-            if y == end_y and x == end_x:
-                return path, current_cost
-            
-            # Explore neighbors (8-directional movement)
-            for dy, dx in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
-                ny, nx = y + dy, x + dx
-                
-                # Check bounds
-                if 0 <= ny < self.size and 0 <= nx < self.size and (ny, nx) not in visited:
-                    # Calculate movement cost
-                    move_cost = self.cost_map[ny, nx]
-                    
-                    # Diagonal movement costs more
-                    if abs(dy) + abs(dx) == 2:  # Diagonal move
-                        move_cost *= 1.414  # sqrt(2)
-                    
-                    new_cost = current_cost + move_cost
-                    new_path = path + [(ny, nx)]
-                    
-                    heapq.heappush(pq, (new_cost, ny, nx, new_path))
-        
-        # No path found
-        return None, float('inf')
+        try:
+            path, cost = route_through_array(
+                self.cost_map,
+                start=start,
+                end=end,
+                fully_connected=True
+            )
+            return path, cost
+        except Exception as e:
+            self.logger.warning(f"Pathfinding failed between {start} and {end}: {e}")
+            return None, float('inf')
     
     def _determine_road_type(self, settlement1, settlement2):
         """Determine road type based on connected settlement types."""
