@@ -30,7 +30,7 @@ try:
 except ImportError:
     MPL_3D_AVAILABLE = False
 
-from .generators import Layer, EarthLayer, PrecipitationLayer, WaterLayer
+from .generators import Layer, EarthLayer, PrecipitationLayer, WaterLayer, VegetationLayer, PopulationLayer, RoadLayer
 
 
 class TerrainVisualizer:
@@ -119,8 +119,12 @@ class TerrainVisualizer:
     
     def create_composite_map(self, elevation: EarthLayer, water: Optional[WaterLayer] = None,
                            precipitation: Optional[PrecipitationLayer] = None,
+                           vegetation: Optional[VegetationLayer] = None,
+                           population: Optional[PopulationLayer] = None,
+                           roads: Optional[RoadLayer] = None,
                            alpha_water: float = 0.7, alpha_precip: float = 0.5,
-                           figsize: Tuple[int, int] = (10, 10)):
+                           alpha_vegetation: float = 0.6, alpha_population: float = 0.8,
+                           alpha_roads: float = 0.9, figsize: Tuple[int, int] = (10, 10)):
         """Create a composite map combining multiple layers."""
         self.logger.debug("Creating composite map")
         
@@ -128,6 +132,12 @@ class TerrainVisualizer:
         
         # Base elevation layer
         im_elev = ax.imshow(elevation.layer, cmap='terrain', origin='lower')
+        
+        # Overlay vegetation layer (before water/population so they appear on top)
+        if vegetation is not None:
+            veg_mask = vegetation.layer > 0.1  # Only show significant vegetation
+            im_veg = ax.imshow(np.ma.masked_where(~veg_mask, vegetation.layer),
+                             cmap='Greens', alpha=alpha_vegetation, origin='lower')
         
         # Overlay water layer
         if water is not None:
@@ -141,15 +151,58 @@ class TerrainVisualizer:
             im_precip = ax.imshow(np.ma.masked_where(~precip_mask, precipitation.layer),
                                 cmap='Blues', alpha=alpha_precip, origin='lower')
         
+        # Overlay population settlements (on top of everything)
+        if population is not None:
+            pop_mask = population.layer > 0  # Show all settlements
+            im_pop = ax.imshow(np.ma.masked_where(~pop_mask, population.layer),
+                             cmap='tab10', alpha=alpha_population, origin='lower')
+            
+            # Add settlement markers for better visibility
+            settlement_info = population.get_settlement_info()
+            for settlement_id, info in settlement_info.items():
+                center_y, center_x = info['center']
+                settlement_type = info['type']
+                
+                # Different markers for different settlement types
+                if settlement_type == 'hamlet':
+                    marker, size = 'o', 20
+                elif settlement_type == 'village':
+                    marker, size = 's', 30
+                elif settlement_type == 'town':
+                    marker, size = '^', 40
+                else:  # city
+                    marker, size = '*', 50
+                
+                ax.scatter(center_x, center_y, marker=marker, s=size, 
+                          c='red', edgecolors='black', linewidth=1, zorder=10)
+        
+        # Overlay road network (on top of everything)
+        if roads is not None:
+            road_mask = roads.layer > 0  # Show all roads
+            # Create custom colormap for roads
+            road_colors = ['white', 'burlywood', 'saddlebrown', 'maroon']
+            from matplotlib.colors import ListedColormap
+            road_cmap = ListedColormap(road_colors)
+            
+            im_roads = ax.imshow(np.ma.masked_where(~road_mask, roads.layer),
+                               cmap=road_cmap, alpha=alpha_roads, origin='lower',
+                               vmin=0, vmax=3, zorder=5)
+        
         ax.set_title("Composite Terrain Map")
         ax.axis('off')
         
         # Create custom legend
         legend_elements = [patches.Patch(color='brown', label='Terrain')]
+        if vegetation is not None:
+            legend_elements.append(patches.Patch(color='green', label='Vegetation'))
         if water is not None:
             legend_elements.append(patches.Patch(color='blue', label='Water'))
         if precipitation is not None:
             legend_elements.append(patches.Patch(color='lightblue', label='Precipitation'))
+        if population is not None:
+            legend_elements.append(patches.Patch(color='red', label='Settlements'))
+        if roads is not None:
+            legend_elements.append(patches.Patch(color='saddlebrown', label='Roads'))
         
         ax.legend(handles=legend_elements, loc='upper right')
         
@@ -408,6 +461,12 @@ class TerrainVisualizer:
             return 'Blues'
         elif isinstance(layer, PrecipitationLayer):
             return 'Blues'
+        elif isinstance(layer, VegetationLayer):
+            return 'Greens'
+        elif isinstance(layer, PopulationLayer):
+            return 'tab10'  # Discrete colormap for settlement IDs
+        elif isinstance(layer, RoadLayer):
+            return 'copper'  # Brown tones for roads
         else:
             return 'viridis'
     
@@ -495,10 +554,13 @@ def quick_plot(layer: Layer, **kwargs):
     return viz.plot_single_layer(layer, **kwargs)
 
 def quick_composite(elevation: EarthLayer, water: Optional[WaterLayer] = None,
-                   precipitation: Optional[PrecipitationLayer] = None, **kwargs):
+                   precipitation: Optional[PrecipitationLayer] = None,
+                   vegetation: Optional[VegetationLayer] = None,
+                   population: Optional[PopulationLayer] = None,
+                   roads: Optional[RoadLayer] = None, **kwargs):
     """Quick composite map creation."""
     viz = TerrainVisualizer()
-    return viz.create_composite_map(elevation, water, precipitation, **kwargs)
+    return viz.create_composite_map(elevation, water, precipitation, vegetation, population, roads, **kwargs)
 
 def quick_3d(elevation: EarthLayer, water: Optional[WaterLayer] = None, **kwargs):
     """Quick 3D visualization."""
@@ -518,3 +580,157 @@ def interactive_view(elevation: EarthLayer, water: Optional[WaterLayer] = None,
     except ImportError:
         print("Plotly not available for interactive visualization")
         return viz._create_matplotlib_dashboard(elevation, water, precipitation)
+
+def plot_population_with_info(population: PopulationLayer, figsize: Tuple[int, int] = (10, 8)):
+    """
+    Create a specialized plot for PopulationLayer with settlement information.
+    
+    Args:
+        population: PopulationLayer to visualize
+        figsize: Figure size tuple
+        
+    Returns:
+        Tuple of (figure, axes) for the plot
+    """
+    viz = TerrainVisualizer()
+    fig, ax = viz.plot_single_layer(population, figsize=figsize)
+    
+    # Add settlement information
+    settlement_info = population.get_settlement_info()
+    
+    for settlement_id, info in settlement_info.items():
+        center_y, center_x = info['center']
+        settlement_type = info['type']
+        size = info['size']
+        
+        # Different markers for different settlement types
+        if settlement_type == 'hamlet':
+            marker, marker_size = 'o', 30
+        elif settlement_type == 'village':
+            marker, marker_size = 's', 40
+        elif settlement_type == 'town':
+            marker, marker_size = '^', 50
+        else:  # city
+            marker, marker_size = '*', 60
+        
+        # Plot settlement center
+        ax.scatter(center_x, center_y, marker=marker, s=marker_size, 
+                  c='red', edgecolors='black', linewidth=2, zorder=10)
+        
+        # Add text label
+        ax.annotate(f'{settlement_type.title()}\n(ID: {settlement_id}, Size: {size})',
+                   (center_x, center_y), xytext=(5, 5), textcoords='offset points',
+                   fontsize=8, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+    
+    ax.set_title(f"Population Map - {len(settlement_info)} Settlements")
+    
+    # Add legend for settlement types
+    legend_elements = [
+        plt.scatter([], [], marker='o', s=30, c='red', edgecolors='black', label='Hamlet'),
+        plt.scatter([], [], marker='s', s=40, c='red', edgecolors='black', label='Village'),
+        plt.scatter([], [], marker='^', s=50, c='red', edgecolors='black', label='Town'),
+        plt.scatter([], [], marker='*', s=60, c='red', edgecolors='black', label='City')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right')
+    
+    return fig, ax
+
+def plot_road_network_with_info(roads: RoadLayer, population: Optional[PopulationLayer] = None, 
+                               figsize: Tuple[int, int] = (12, 8)):
+    """
+    Create a specialized plot for RoadLayer with network information.
+    
+    Args:
+        roads: RoadLayer to visualize
+        population: Optional PopulationLayer to show settlements
+        figsize: Figure size tuple
+        
+    Returns:
+        Tuple of (figure, axes) for the plot
+    """
+    viz = TerrainVisualizer()
+    
+    # Create custom colormap for roads
+    road_colors = ['white', 'burlywood', 'saddlebrown', 'maroon']
+    from matplotlib.colors import ListedColormap
+    road_cmap = ListedColormap(road_colors)
+    
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Plot road network
+    im = ax.imshow(roads.layer, cmap=road_cmap, origin='lower', vmin=0, vmax=3)
+    ax.set_title("Road Network")
+    ax.axis('off')
+    
+    # Add settlement markers if population layer is provided
+    if population is not None:
+        settlement_info = population.get_settlement_info()
+        
+        for settlement_id, info in settlement_info.items():
+            center_y, center_x = info['center']
+            settlement_type = info['type']
+            
+            # Different markers for different settlement types
+            if settlement_type == 'hamlet':
+                marker, marker_size = 'o', 40
+            elif settlement_type == 'village':
+                marker, marker_size = 's', 50
+            elif settlement_type == 'town':
+                marker, marker_size = '^', 60
+            else:  # city
+                marker, marker_size = '*', 70
+            
+            # Plot settlement center
+            ax.scatter(center_x, center_y, marker=marker, s=marker_size, 
+                      c='red', edgecolors='white', linewidth=2, zorder=10)
+            
+            # Add settlement ID label
+            ax.annotate(f'{settlement_id}', (center_x, center_y), 
+                       xytext=(0, 0), textcoords='offset points',
+                       ha='center', va='center', fontsize=8, fontweight='bold',
+                       color='white')
+    
+    # Add colorbar for road types
+    cbar = plt.colorbar(im, ax=ax, shrink=0.6)
+    cbar.set_ticks([0, 1, 2, 3])
+    cbar.set_ticklabels(['No Road', 'Path', 'Road', 'Highway'])
+    cbar.set_label('Road Type')
+    
+    # Add network statistics
+    network_info = roads.get_road_network_info()
+    stats_text = f"Total Road Cells: {network_info['total_road_cells']}\n"
+    stats_text += f"Paths: {network_info['road_type_distribution']['paths']}\n"
+    stats_text += f"Roads: {network_info['road_type_distribution']['roads']}\n"
+    stats_text += f"Highways: {network_info['road_type_distribution']['highways']}\n"
+    stats_text += f"Connections: {network_info['network_connections']}"
+    
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+            verticalalignment='top', fontsize=9,
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8))
+    
+    # Add legend for settlement types if population is provided
+    if population is not None:
+        legend_elements = [
+            plt.scatter([], [], marker='o', s=40, c='red', edgecolors='white', label='Hamlet'),
+            plt.scatter([], [], marker='s', s=50, c='red', edgecolors='white', label='Village'),
+            plt.scatter([], [], marker='^', s=60, c='red', edgecolors='white', label='Town'),
+            plt.scatter([], [], marker='*', s=70, c='red', edgecolors='white', label='City')
+        ]
+        ax.legend(handles=legend_elements, loc='upper right')
+    
+    return fig, ax
+
+def plot_cost_map(roads: RoadLayer, figsize: Tuple[int, int] = (10, 8)):
+    """
+    Visualize the terrain cost map used for pathfinding.
+    
+    Args:
+        roads: RoadLayer with calculated cost map
+        figsize: Figure size tuple
+        
+    Returns:
+        Tuple of (figure, axes) for the plot
+    """
+    return roads.visualize_cost_map(figsize=figsize)
+
+
